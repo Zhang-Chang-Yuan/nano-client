@@ -583,7 +583,12 @@ class AppController extends Notifier<AppState> {
       configJson: encodeConfig(config),
       workingDirectory: provision.workingDirectory,
     );
-    return state.isRunning;
+
+    // ⚠️ 必须读 core.status，不能读 state.isRunning。
+    // state.coreStatus 是由事件流异步更新出来的，core.start() 返回时
+    // 那个 running 事件可能还没投递到，读 state 会误判成启动失败，
+    // 导致后面的系统代理接管被整段跳过。
+    return core.status == CoreStatus.running;
   }
 
   /// 连接：拉起内核，并把系统代理指向它。
