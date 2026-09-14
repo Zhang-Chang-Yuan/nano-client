@@ -454,7 +454,7 @@ class _ProxyAddress extends StatelessWidget {
           style: theme.textTheme.bodySmall,
         ),
         const SizedBox(height: 6),
-        if (state.systemProxyActive)
+        if (state.systemProxyActive) ...[
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -462,8 +462,19 @@ class _ProxyAddress extends StatelessWidget {
               const SizedBox(width: 4),
               Text('已接管系统代理', style: theme.textTheme.bodySmall),
             ],
-          )
-        else
+          ),
+          const SizedBox(height: 4),
+          // 踩过两次的坑：浏览器只在启动时读取系统代理，
+          // 之后再改不会生效，必须先起来的那批程序重启一次。
+          Text(
+            '若浏览器仍打不开海外站点，请重启该浏览器'
+            '（它只在启动时读取系统代理）',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.disabledColor,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ] else
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
