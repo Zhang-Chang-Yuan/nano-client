@@ -12,6 +12,12 @@ import 'dart:io';
 
 import '../api/panel_api.dart';
 
+/// 去掉内核输出里的 ANSI 颜色转义。
+///
+/// sing-box 会给日志上色，直接把原始行塞进界面会看到一堆 `\x1b[31m`。
+String stripAnsi(String input) =>
+    input.replaceAll(RegExp(r'\x1B\[[0-9;]*[A-Za-z]'), '');
+
 /// 内核运行状态。
 enum CoreStatus {
   stopped('已停止'),
@@ -61,6 +67,7 @@ abstract class ProxyCore {
 class ProcessProxyCore implements ProxyCore {
   ProcessProxyCore({
     required this.executablePath,
+    this.mixedPort = 7890,
     this.clashPort = 9090,
     this.clashSecret = '',
     this.transport,
@@ -69,11 +76,17 @@ class ProcessProxyCore implements ProxyCore {
   /// sing-box 可执行文件路径。
   final String executablePath;
 
+  /// 混合入站（SOCKS5 + HTTP）端口，用于启动前的占用检查。
+  final int mixedPort;
+
   final int clashPort;
   final String clashSecret;
 
   /// 用于访问 Clash API 的 HTTP 传输层；为 null 时跳过就绪探测。
   final HttpTransport? transport;
+
+  /// 内核最近若干行输出，启动失败时用来回溯原因。
+  final List<String> _recentOutput = [];
 
   final _controller = StreamController<CoreEvent>.broadcast();
   Process? _process;
@@ -92,6 +105,51 @@ class ProcessProxyCore implements ProxyCore {
     }
   }
 
+  /// 记录内核输出，供启动失败时回溯原因。
+  void _recordOutput(String rawLine) {
+    final line = stripAnsi(rawLine);
+    if (line.trim().isEmpty) return;
+    _recentOutput.add(line);
+    if (_recentOutput.length > 40) _recentOutput.removeAt(0);
+    _emit(_status, logLine: line);
+  }
+
+  /// 从最近的输出里挑一条最能说明问题的，作为失败原因。
+  String _failureDetail() {
+    if (_recentOutput.isEmpty) return '';
+    // 优先 FATAL/ERROR，其次最后一行
+    for (final line in _recentOutput.reversed) {
+      if (line.contains('FATAL') || line.contains('ERROR')) {
+        return '：${_stripLevel(line)}';
+      }
+    }
+    return '：${_recentOutput.last}';
+  }
+
+  String _stripLevel(String line) {
+    // sing-box 的行形如 "FATAL[0000] start service: ..."
+    final match = RegExp(r'^(FATAL|ERROR|WARN|INFO)\[\d+\]\s*')
+        .firstMatch(line);
+    return match == null ? line : line.substring(match.end);
+  }
+
+  /// 检查端口是否已被占用。
+  ///
+  /// 内核在端口冲突时只会打印一行 FATAL 就退出，从界面上看很像"启动超时"，
+  /// 所以这里提前查一次，给出能直接照着做的提示。
+  Future<bool> isPortInUse(int port) async {
+    try {
+      final socket = await ServerSocket.bind(
+        InternetAddress.loopbackIPv4,
+        port,
+      );
+      await socket.close();
+      return false;
+    } on SocketException {
+      return true;
+    }
+  }
+
   @override
   Future<void> start({
     required String configJson,
@@ -101,6 +159,19 @@ class ProcessProxyCore implements ProxyCore {
       return;
     }
     _emit(CoreStatus.starting);
+    _recentOutput.clear();
+
+    for (final entry in {'混合代理': mixedPort, 'Clash API': clashPort}.entries) {
+      if (await isPortInUse(entry.value)) {
+        _emit(
+          CoreStatus.failed,
+          message:
+              '${entry.key}端口 ${entry.value} 已被占用，'
+              '请在「设置 → 代理」里换一个端口后重试',
+        );
+        return;
+      }
+    }
 
     final dir = Directory(workingDirectory);
     if (!dir.existsSync()) {
@@ -126,11 +197,11 @@ class ProcessProxyCore implements ProxyCore {
       process.stdout
           .transform(utf8.decoder)
           .transform(const LineSplitter())
-          .listen((line) => _emit(_status, logLine: line));
+          .listen(_recordOutput);
       process.stderr
           .transform(utf8.decoder)
           .transform(const LineSplitter())
-          .listen((line) => _emit(_status, logLine: line));
+          .listen(_recordOutput);
 
       unawaited(
         process.exitCode.then((code) {
@@ -140,7 +211,11 @@ class ProcessProxyCore implements ProxyCore {
           } else if (code == 0) {
             _emit(CoreStatus.stopped);
           } else {
-            _emit(CoreStatus.failed, message: '内核退出，代码 $code');
+            // 把内核自己的报错带出来，别只留一个退出码
+            _emit(
+              CoreStatus.failed,
+              message: '内核退出（代码 $code）${_failureDetail()}',
+            );
           }
         }),
       );
@@ -149,8 +224,12 @@ class ProcessProxyCore implements ProxyCore {
       final ready = await _waitForClashApi();
       if (ready) {
         _emit(CoreStatus.running);
-      } else {
-        _emit(CoreStatus.failed, message: '内核启动超时，Clash API 未就绪');
+      } else if (_status != CoreStatus.failed) {
+        // 没就绪且进程也没报错 —— 多半是等超时了
+        _emit(
+          CoreStatus.failed,
+          message: '内核启动超时，Clash API 未就绪${_failureDetail()}',
+        );
       }
     } on Object catch (e) {
       _emit(CoreStatus.failed, message: '启动失败: $e');

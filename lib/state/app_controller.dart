@@ -516,6 +516,7 @@ class AppController extends Notifier<AppState> {
 
       final core = ProcessProxyCore(
         executablePath: provision.executablePath,
+        mixedPort: state.config.proxy.mixedPort,
         clashPort: state.config.proxy.clashPort,
         clashSecret: state.config.proxy.clashSecret,
         transport: ref.read(httpTransportProvider),
