@@ -20,6 +20,7 @@ import '../core/proxy/latency_tester.dart';
 import '../core/proxy/proxy_core.dart';
 import '../core/proxy/singbox_config.dart';
 import '../core/proxy/system_proxy.dart';
+import '../core/proxy/tun_privilege.dart';
 import '../core/subscription/proxy_node.dart';
 
 /// 配置下发地址候选，来自 APK 逆向（见 doc/01-recon.md §4.1）。
@@ -78,6 +79,8 @@ class AppState {
     this.testingNodes = false,
     this.systemProxyActive = false,
     this.systemProxyDetail,
+    this.tunPrivilege,
+    this.tunBusy = false,
   });
 
   final AppConfig config;
@@ -110,6 +113,12 @@ class AppState {
 
   /// 接管失败时的原因。
   final String? systemProxyDetail;
+
+  /// TUN 权限检查结果；null 表示尚未检查。
+  final TunPrivilegeResult? tunPrivilege;
+
+  /// 是否正在执行 TUN 授权 / 清理。
+  final bool tunBusy;
 
   bool get isRunning => coreStatus == CoreStatus.running;
 
@@ -173,6 +182,8 @@ class AppState {
     bool? testingNodes,
     bool? systemProxyActive,
     String? systemProxyDetail,
+    TunPrivilegeResult? tunPrivilege,
+    bool? tunBusy,
     bool clearError = false,
     bool clearNotice = false,
     bool clearSubscription = false,
@@ -195,6 +206,8 @@ class AppState {
       testingNodes: testingNodes ?? this.testingNodes,
       systemProxyActive: systemProxyActive ?? this.systemProxyActive,
       systemProxyDetail: systemProxyDetail ?? this.systemProxyDetail,
+      tunPrivilege: tunPrivilege ?? this.tunPrivilege,
+      tunBusy: tunBusy ?? this.tunBusy,
     );
   }
 }
@@ -208,6 +221,8 @@ class AppController extends Notifier<AppState> {
   StreamSubscription<CoreEvent>? _coreSubscription;
   static const _systemProxy = SystemProxyController();
   static const _tcpTester = TcpLatencyTester();
+  static const _tunPrivilege = TunPrivilege();
+  ProvisionResult? _provisionCache;
   bool _systemProxyApplied = false;
   List<String> _availableRuleSets = const [];
 
@@ -522,7 +537,63 @@ class AppController extends Notifier<AppState> {
     return best;
   }
 
+  // -- TUN -----------------------------------------------------------------
+
+  /// 重新检查 TUN 权限与残留。
+  Future<void> refreshTunStatus() async {
+    state = state.copyWith(tunBusy: true, clearError: true);
+    try {
+      final provision = await _ensureProvisioned();
+      final result = await _tunPrivilege.check(provision.executablePath);
+      state = state.copyWith(tunPrivilege: result, tunBusy: false);
+    } on Object catch (e) {
+      state = state.copyWith(tunBusy: false, error: '检查 TUN 权限失败：$e');
+    }
+  }
+
+  /// 一键授权：触发一次系统密码框，给内核加 TUN 所需 capability。
+  Future<bool> grantTun() async {
+    state = state.copyWith(tunBusy: true, clearError: true);
+    try {
+      final provision = await _ensureProvisioned();
+      final result = await _tunPrivilege.grant(provision.executablePath);
+      state = state.copyWith(tunPrivilege: result, tunBusy: false);
+      if (result.isReady) {
+        state = state.copyWith(notice: 'TUN 权限已就绪，之后免密');
+        return true;
+      }
+      state = state.copyWith(error: result.detail ?? '授权未完成');
+      return false;
+    } on Object catch (e) {
+      state = state.copyWith(tunBusy: false, error: '授权失败：$e');
+      return false;
+    }
+  }
+
+  /// 清理上次异常退出留下的 TUN 网卡与策略路由。
+  Future<void> cleanupTunLeftovers() async {
+    state = state.copyWith(tunBusy: true, clearError: true);
+    final failure = await _tunPrivilege.cleanupLeftovers();
+    if (failure != null) {
+      state = state.copyWith(tunBusy: false, error: '清理失败：$failure');
+      return;
+    }
+    await refreshTunStatus();
+    state = state.copyWith(tunBusy: false, notice: '已清理残留的 TUN 路由');
+  }
+
   // -- 内核生命周期 -------------------------------------------------------
+
+  /// 取内核可执行文件，必要时先释放一次。
+  ///
+  /// TUN 授权要在内核文件存在的前提下才能 `setcap`，所以这里做成可复用的。
+  Future<ProvisionResult> _ensureProvisioned() async {
+    final cached = _provisionCache;
+    if (cached != null && File(cached.executablePath).existsSync()) {
+      return cached;
+    }
+    return _provisionCache = await _provisionCore();
+  }
 
   Future<ProvisionResult> _provisionCore() async {
     final support = await getApplicationSupportDirectory();
@@ -557,7 +628,7 @@ class AppController extends Notifier<AppState> {
       if (state.nodes.isEmpty) return false;
     }
 
-    final provision = await _provisionCore();
+    final provision = await _ensureProvisioned();
     final config = buildSingboxConfig(
       nodes: state.nodes,
       proxy: state.config.proxy,
@@ -602,13 +673,41 @@ class AppController extends Notifier<AppState> {
     state = state.copyWith(busy: true, clearError: true);
 
     try {
+      // TUN 要先拿到权限，否则内核起来也会因为建不了网卡而退出
+      if (state.config.proxy.enableTun) {
+        final provision = await _ensureProvisioned();
+        final tun = await _tunPrivilege.check(provision.executablePath);
+        state = state.copyWith(tunPrivilege: tun);
+
+        if (!tun.isReady) {
+          state = state.copyWith(
+            busy: false,
+            error: 'TUN 模式需要先授权：${tun.detail ?? ""}',
+          );
+          return;
+        }
+        if (tun.hasLeftovers) {
+          // 上次异常退出留下的网卡/路由会让本次设置异常，先清掉
+          await _tunPrivilege.cleanupLeftovers();
+        }
+      }
+
       final started = await _startCore();
       if (!started) {
         state = state.copyWith(busy: false);
         return;
       }
 
-      await _applySystemProxy();
+      if (state.config.proxy.enableTun) {
+        // TUN 已经在网络层接管，再设系统代理是多余的，
+        // 两套混用反而容易出现"双重代理"这类怪问题。
+        state = state.copyWith(
+          systemProxyActive: false,
+          systemProxyDetail: 'TUN 模式已在网络层接管，无需系统代理',
+        );
+      } else {
+        await _applySystemProxy();
+      }
       state = state.copyWith(busy: false);
 
       // 连接后自动测一轮速，让节点列表直接带上延迟并自动选最快

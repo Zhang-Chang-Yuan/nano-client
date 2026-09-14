@@ -10,6 +10,7 @@ import 'dart:convert';
 
 import '../config/app_config.dart';
 import '../subscription/proxy_node.dart';
+import 'tun_privilege.dart';
 
 /// sing-box 1.14 起已移除的出站类型。
 const Set<String> kUnsupportedOutboundTypes = {'shadowsocksr'};
@@ -104,6 +105,8 @@ Map<String, dynamic> buildSingboxConfig({
     inbounds.add(<String, dynamic>{
       'type': 'tun',
       'tag': 'tun-in',
+      // 固定网卡名，便于识别并清理异常退出留下的残留
+      'interface_name': kTunInterfaceName,
       'address': <String>['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
       'mtu': 9000,
       'auto_route': true,

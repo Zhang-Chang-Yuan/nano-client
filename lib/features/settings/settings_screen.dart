@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../core/config/app_config.dart';
+import '../../core/proxy/tun_privilege.dart';
 import '../../state/app_controller.dart';
 import '../setup/setup_screen.dart';
 
@@ -63,12 +64,19 @@ class SettingsScreen extends ConsumerWidget {
           SwitchListTile(
             secondary: const Icon(Icons.vpn_lock_outlined),
             title: const Text('TUN 模式'),
-            subtitle: const Text('接管全部流量，需要管理员权限'),
-            value: state.config.proxy.enableTun,
-            onChanged: (value) => controller.updateProxy(
-              state.config.proxy.copyWith(enableTun: value),
+            subtitle: const Text(
+              '在网络层接管全部流量：Flatpak 应用、不认代理的程序、ping 全都生效。'
+              '需要一次系统授权（之后免密）',
             ),
+            value: state.config.proxy.enableTun,
+            onChanged: (value) async {
+              await controller.updateProxy(
+                state.config.proxy.copyWith(enableTun: value),
+              );
+              if (value) await controller.refreshTunStatus();
+            },
           ),
+          if (state.config.proxy.enableTun) _TunStatus(state: state),
           SwitchListTile(
             secondary: const Icon(Icons.speed_outlined),
             title: const Text('连接后自动测速'),
@@ -319,6 +327,135 @@ class _VersionTile extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// TUN 权限状态与一键授权。
+class _TunStatus extends ConsumerStatefulWidget {
+  const _TunStatus({required this.state});
+
+  final AppState state;
+
+  @override
+  ConsumerState<_TunStatus> createState() => _TunStatusState();
+}
+
+class _TunStatusState extends ConsumerState<_TunStatus> {
+  @override
+  void initState() {
+    super.initState();
+    // 进入设置页就查一次，用户不用手动点
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(appControllerProvider.notifier).refreshTunStatus();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = widget.state;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final tun = state.tunPrivilege;
+    final controller = ref.read(appControllerProvider.notifier);
+
+    if (state.tunBusy || tun == null) {
+      return const ListTile(
+        leading: SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+        title: Text('正在检查 TUN 权限…'),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: Card(
+        color: tun.isReady ? scheme.primaryContainer : scheme.errorContainer,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    tun.isReady ? Icons.check_circle : Icons.warning_amber,
+                    size: 18,
+                    color: tun.isReady
+                        ? scheme.onPrimaryContainer
+                        : scheme.onErrorContainer,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      switch (tun.status) {
+                        TunPrivilegeStatus.ready => 'TUN 权限已就绪',
+                        TunPrivilegeStatus.needsGrant => '需要一次系统授权',
+                        TunPrivilegeStatus.unsupported => '当前平台需手工处理',
+                      },
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        color: tun.isReady
+                            ? scheme.onPrimaryContainer
+                            : scheme.onErrorContainer,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (tun.detail != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  tun.detail!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: tun.isReady
+                        ? scheme.onPrimaryContainer
+                        : scheme.onErrorContainer,
+                  ),
+                ),
+              ],
+              if (tun.command != null) ...[
+                const SizedBox(height: 8),
+                SelectableText(
+                  tun.command!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontFamily: 'monospace',
+                    color: scheme.onErrorContainer,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                children: [
+                  if (tun.status == TunPrivilegeStatus.needsGrant)
+                    FilledButton.icon(
+                      onPressed: controller.grantTun,
+                      icon: const Icon(Icons.key, size: 18),
+                      label: const Text('一键授权'),
+                    ),
+                  if (tun.hasLeftovers)
+                    OutlinedButton.icon(
+                      onPressed: controller.cleanupTunLeftovers,
+                      icon: const Icon(
+                        Icons.cleaning_services_outlined,
+                        size: 18,
+                      ),
+                      label: const Text('清理残留路由'),
+                    ),
+                  TextButton.icon(
+                    onPressed: controller.refreshTunStatus,
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('重新检查'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
