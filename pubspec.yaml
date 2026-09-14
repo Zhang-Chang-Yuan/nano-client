@@ -1,0 +1,46 @@
+name: nano_client
+description: 跨平台代理客户端，对接 V2Board 面板，内置 sing-box 内核。
+publish_to: "none"
+
+# 版本号与构建号由 CI 覆盖（见 .github/workflows/build.yml）。
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.3
+  flutter: ">=3.38.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # 状态管理：与参考项目 Hiddify 保持一致的技术选型
+  flutter_riverpod: ^3.4.3
+
+  # 网络
+  dio: ^5.11.1
+
+  # 配置加密：主密钥存系统钥匙串，配置本身用 AES-256-GCM
+  flutter_secure_storage: ^11.1.1
+  cryptography: ^2.9.0
+
+  # 平台路径与版本信息
+  path_provider: ^2.1.6
+  package_info_plus: ^10.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  archive: ^4.3.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    # 规则集随仓库提交（合计约 90KB），使自动分流开箱可用
+    - assets/rule-set/
+    # 内核目录只提交占位文件，真正的可执行文件由
+    # `dart run tool/fetch_core.dart` 或 CI 下载后放入
+    - assets/bin/

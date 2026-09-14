@@ -1,0 +1,75 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Widget Preview related
+.widget_preview/
+
+# ---------------------------------------------------------------------------
+# 内核二进制：不进仓库
+#
+# sing-box 约 30-90MB，且各平台不同，由 `dart run tool/fetch_core.dart`
+# 或 CI 在构建前下载到 assets/bin/。目录本身保留（含 README.md 与 VERSION）。
+# ---------------------------------------------------------------------------
+/assets/bin/sing-box
+/assets/bin/sing-box.exe
+
+# ---------------------------------------------------------------------------
+# 本地配置与密钥：**绝对不要提交**
+#
+# 运行时配置一律写在系统的应用支持目录，正常不会出现在仓库里；
+# 这里再做一层兜底，防止有人把配置或密钥放到工程目录内被误提交。
+# ---------------------------------------------------------------------------
+config/
+*.enc
+*.master_key
+.master_key
+nano_state.json
+*.corrupt-*.bak
+
+# 内核运行时产物
+cache.db
+singbox-config.json
+

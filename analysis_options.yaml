@@ -1,0 +1,54 @@
+# 代码规范配置。
+#
+# 基于 flutter_lints 推荐集，并额外开启一批更严格的检查，
+# 目的是让这个仓库保持干净、可长期维护。
+
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+
+  errors:
+    # 未使用的 import / 变量属于明显疏漏，直接按错误处理
+    unused_import: error
+    unused_local_variable: error
+    unused_element: error
+    dead_code: error
+
+  exclude:
+    # 平台脚手架由 flutter create 生成，不纳入检查
+    - build/**
+    - android/**
+    - ios/**
+    - windows/**
+    - macos/**
+    - linux/**
+
+linter:
+  rules:
+    # 风格一致性
+    prefer_single_quotes: true
+    prefer_final_locals: true
+    prefer_const_constructors: true
+    prefer_const_declarations: true
+    prefer_const_literals_to_create_immutables: true
+    require_trailing_commas: true
+    sort_child_properties_last: true
+    always_declare_return_types: true
+    use_super_parameters: true
+    slash_for_doc_comments: true
+
+    # 正确性
+    avoid_print: true
+    avoid_dynamic_calls: true
+    avoid_empty_else: true
+    cancel_subscriptions: true
+    close_sinks: true
+    only_throw_errors: true
+    throw_in_finally: true
+    unawaited_futures: true
+    unnecessary_lambdas: true
+    use_build_context_synchronously: true

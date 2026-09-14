@@ -1,0 +1,3 @@
+# auto 模式使用的规则集，每行一个 tag，对应 assets/rule-set/<tag>.srs
+geosite-cn
+geoip-cn

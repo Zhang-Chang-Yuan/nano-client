@@ -1,0 +1,210 @@
+# 构建与发布。
+#
+# 各平台构建是独立的 job，互不阻塞；Android / iOS 的失败不会影响桌面端产物。
+# 内核（sing-box）在构建前由 `dart run tool/fetch_core.dart` 下载到 assets/，
+# 因此仓库里不保存任何二进制。
+
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'tool/**'
+      - 'assets/**'
+      - 'pubspec.yaml'
+      - '.github/workflows/build.yml'
+  pull_request:
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'tool/**'
+      - 'assets/**'
+      - 'pubspec.yaml'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+env:
+  FLUTTER_VERSION: '3.47.4'
+  SINGBOX_VERSION: '1.14.0'
+
+jobs:
+  # 所有平台共用的质量门禁：静态检查 + 单元测试
+  quality:
+    name: 静态检查与单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 安装依赖
+        run: flutter pub get
+
+      - name: 代码格式检查
+        run: dart format --output=none --set-exit-if-changed lib test tool
+
+      - name: 静态分析
+        run: flutter analyze
+
+      - name: 单元测试
+        run: flutter test --reporter expanded
+
+  linux:
+    name: Linux
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Linux 桌面构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgtk-3-dev libsecret-1-dev \
+            libjsoncpp-dev libayatana-appindicator3-dev
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+      - name: 下载 sing-box 内核
+        run: dart run tool/fetch_core.dart --version ${{ env.SINGBOX_VERSION }}
+      - run: flutter build linux --release
+      - name: 打包
+        run: tar -czf nano-client-linux-x64.tar.gz -C build/linux/x64/release bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nano-client-linux-x64
+          path: nano-client-linux-x64.tar.gz
+          if-no-files-found: error
+
+  windows:
+    name: Windows
+    needs: quality
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+      - name: 下载 sing-box 内核
+        run: dart run tool/fetch_core.dart --version ${{ env.SINGBOX_VERSION }}
+      - run: flutter build windows --release
+      - name: 打包
+        shell: pwsh
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath nano-client-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nano-client-windows-x64
+          path: nano-client-windows-x64.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS
+    needs: quality
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+      - name: 下载 sing-box 内核
+        run: dart run tool/fetch_core.dart --version ${{ env.SINGBOX_VERSION }}
+      - run: flutter build macos --release
+      - name: 打包
+        run: |
+          cd build/macos/Build/Products/Release
+          zip -r --symlinks "$GITHUB_WORKSPACE/nano-client-macos.zip" *.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nano-client-macos
+          path: nano-client-macos.zip
+          if-no-files-found: error
+
+  android:
+    name: Android
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+      # 说明：移动端系统级代理需要把 sing-box 作为 libbox 编译进应用
+      # （VpnService + JNI），详见 docs/PLATFORMS.md。
+      # 当前 Android 产物提供配置、登录、节点管理与本地代理能力。
+      - run: flutter build apk --release --split-per-abi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nano-client-android
+          path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+
+  ios:
+    name: iOS（不签名）
+    needs: quality
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+      - run: flutter build ios --release --no-codesign
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nano-client-ios-unsigned
+          path: build/ios/iphoneos/Runner.app
+          if-no-files-found: error
+
+  release:
+    name: 发布 Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, macos, android, ios]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
