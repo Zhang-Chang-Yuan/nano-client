@@ -223,6 +223,19 @@ class AppController extends Notifier<AppState> {
   static const _tcpTester = TcpLatencyTester();
   static const _tunPrivilege = TunPrivilege();
   ProvisionResult? _provisionCache;
+
+  /// 上次完成测速的时间。用于避免刚测完、一连接又重测一遍。
+  DateTime? _lastTestAt;
+
+  /// 测速结果的新鲜期。
+  static const Duration _testFreshness = Duration(minutes: 5);
+
+  bool get _recentlyTested {
+    final at = _lastTestAt;
+    if (at == null) return false;
+    return DateTime.now().difference(at) < _testFreshness;
+  }
+
   bool _systemProxyApplied = false;
   List<String> _availableRuleSets = const [];
 
@@ -435,10 +448,16 @@ class AppController extends Notifier<AppState> {
   }
 
   /// 切换节点。
-  Future<void> selectNode(String tag) async {
+  ///
+  /// [byUser] 为 true 表示这是用户手动选的 —— 从此以后任何自动逻辑
+  /// （比如"测速后自动选最快"）都不该再覆盖它。
+  Future<void> selectNode(String tag, {bool byUser = false}) async {
     await _persist(
       state.config.copyWith(
-        proxy: state.config.proxy.copyWith(selectedNodeTag: tag),
+        proxy: state.config.proxy.copyWith(
+          selectedNodeTag: tag,
+          nodeChosenByUser: byUser ? true : state.config.proxy.nodeChosenByUser,
+        ),
       ),
     );
     final core = _core;
@@ -504,7 +523,14 @@ class AppController extends Notifier<AppState> {
       );
     }
 
+    _lastTestAt = DateTime.now();
+
     final ok = results.values.where((d) => d > 0).length;
+    final fastest = _fastestTag(results, tags);
+    final autoSelect =
+        state.config.proxy.autoSelectFastest &&
+        !state.config.proxy.nodeChosenByUser;
+
     state = state.copyWith(
       testingNodes: false,
       nodeDelays: results,
@@ -513,12 +539,14 @@ class AppController extends Notifier<AppState> {
           '$ok / ${tags.length} 个节点可用',
     );
 
-    if (state.config.proxy.autoSelectFastest) {
-      final fastest = _fastestTag(results, tags);
-      if (fastest != null && fastest != state.selectedNodeTag) {
-        await selectNode(fastest);
-        state = state.copyWith(notice: '已自动选择最快的节点：$fastest');
-      }
+    if (fastest == null || fastest == state.selectedNodeTag) return;
+
+    if (autoSelect) {
+      await selectNode(fastest);
+      state = state.copyWith(notice: '已自动选择最快的节点：$fastest');
+    } else {
+      // 用户自己选过节点，就只提示、不擅自改动
+      state = state.copyWith(notice: '最快的是 $fastest（已保留你当前选择的节点）');
     }
   }
 
@@ -710,8 +738,9 @@ class AppController extends Notifier<AppState> {
       }
       state = state.copyWith(busy: false);
 
-      // 连接后自动测一轮速，让节点列表直接带上延迟并自动选最快
-      if (state.config.proxy.autoTestOnConnect) {
+      // 连接后按需自动测一轮速。
+      // 刚手动测过就不重复测了 —— 否则"测速→连接"会连着跑两遍，很费解。
+      if (state.config.proxy.autoTestOnConnect && !_recentlyTested) {
         unawaited(testAllNodes());
       }
     } on Object catch (e) {

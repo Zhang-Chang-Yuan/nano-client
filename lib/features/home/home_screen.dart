@@ -87,7 +87,10 @@ class HomeScreen extends ConsumerWidget {
                 child: RadioGroup<String>(
                   groupValue: state.selectedNodeTag,
                   onChanged: (value) {
-                    if (value != null) controller.selectNode(value);
+                    // 用户手动点选：记下来，之后任何自动逻辑都不再覆盖它
+                    if (value != null) {
+                      controller.selectNode(value, byUser: true);
+                    }
                   },
                   child: Column(
                     children: [

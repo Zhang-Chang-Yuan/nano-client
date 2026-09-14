@@ -80,7 +80,7 @@ class SettingsScreen extends ConsumerWidget {
           SwitchListTile(
             secondary: const Icon(Icons.speed_outlined),
             title: const Text('连接后自动测速'),
-            subtitle: const Text('连接成功后逐节点测一次延迟，便于按延迟排序'),
+            subtitle: const Text('连接成功后逐节点测一次延迟（刚测过会跳过，不重复测）'),
             value: state.config.proxy.autoTestOnConnect,
             onChanged: (value) => controller.updateProxy(
               state.config.proxy.copyWith(autoTestOnConnect: value),
@@ -89,7 +89,10 @@ class SettingsScreen extends ConsumerWidget {
           SwitchListTile(
             secondary: const Icon(Icons.check_circle_outline),
             title: const Text('测速后自动选最快'),
-            subtitle: const Text('测速完成后自动切到延迟最低的节点，省去连上再换线'),
+            subtitle: const Text(
+              '仅在你还没手动选过节点时生效。'
+              '一旦你自己点选过节点，就只提示哪个最快，不会动你的选择',
+            ),
             value: state.config.proxy.autoSelectFastest,
             onChanged: (value) => controller.updateProxy(
               state.config.proxy.copyWith(autoSelectFastest: value),

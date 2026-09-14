@@ -258,8 +258,9 @@ class ProxyConfig {
     this.selectedNodeTag,
     this.nodeSort = NodeSortMode.defaultOrder,
     this.autoTestOnConnect = true,
-    this.autoSelectFastest = true,
+    this.autoSelectFastest = false,
     this.autoSystemProxy = true,
+    this.nodeChosenByUser = false,
   });
 
   final RouteMode routeMode;
@@ -282,7 +283,15 @@ class ProxyConfig {
   final bool autoTestOnConnect;
 
   /// 测速后是否自动切到延迟最低的节点。
+  ///
+  /// 默认关闭：自动改用户已经选好的节点很容易让人困惑。
+  /// 即便打开，也只会在用户**没有手动选过节点**时才生效（见 [nodeChosenByUser]）。
   final bool autoSelectFastest;
+
+  /// 用户是否手动选过节点。
+  ///
+  /// 一旦为 true，就表示用户有自己的偏好，任何自动逻辑都不该覆盖它。
+  final bool nodeChosenByUser;
 
   /// 连接时是否自动接管系统代理。
   ///
@@ -305,6 +314,7 @@ class ProxyConfig {
     bool? autoTestOnConnect,
     bool? autoSelectFastest,
     bool? autoSystemProxy,
+    bool? nodeChosenByUser,
     bool clearSelectedNode = false,
   }) {
     return ProxyConfig(
@@ -324,6 +334,7 @@ class ProxyConfig {
       autoTestOnConnect: autoTestOnConnect ?? this.autoTestOnConnect,
       autoSelectFastest: autoSelectFastest ?? this.autoSelectFastest,
       autoSystemProxy: autoSystemProxy ?? this.autoSystemProxy,
+      nodeChosenByUser: nodeChosenByUser ?? this.nodeChosenByUser,
     );
   }
 
@@ -342,6 +353,7 @@ class ProxyConfig {
     'autoTestOnConnect': autoTestOnConnect,
     'autoSelectFastest': autoSelectFastest,
     'autoSystemProxy': autoSystemProxy,
+    'nodeChosenByUser': nodeChosenByUser,
   };
 
   static ProxyConfig fromJson(Map<String, dynamic> json) => ProxyConfig(
@@ -357,8 +369,9 @@ class ProxyConfig {
     selectedNodeTag: json['selectedNodeTag'] as String?,
     nodeSort: NodeSortMode.fromId(json['nodeSort'] as String?),
     autoTestOnConnect: (json['autoTestOnConnect'] as bool?) ?? true,
-    autoSelectFastest: (json['autoSelectFastest'] as bool?) ?? true,
+    autoSelectFastest: (json['autoSelectFastest'] as bool?) ?? false,
     autoSystemProxy: (json['autoSystemProxy'] as bool?) ?? true,
+    nodeChosenByUser: (json['nodeChosenByUser'] as bool?) ?? false,
   );
 
   @override
@@ -377,7 +390,8 @@ class ProxyConfig {
       other.nodeSort == nodeSort &&
       other.autoTestOnConnect == autoTestOnConnect &&
       other.autoSelectFastest == autoSelectFastest &&
-      other.autoSystemProxy == autoSystemProxy;
+      other.autoSystemProxy == autoSystemProxy &&
+      other.nodeChosenByUser == nodeChosenByUser;
 
   @override
   int get hashCode => Object.hash(
@@ -395,6 +409,7 @@ class ProxyConfig {
     autoTestOnConnect,
     autoSelectFastest,
     autoSystemProxy,
+    nodeChosenByUser,
   );
 }
 

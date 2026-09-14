@@ -29,7 +29,7 @@ void main() {
       expect(restored.nodeSort, NodeSortMode.delay);
     });
 
-    test('旧版本配置缺少这些字段时按开启处理（向后兼容）', () {
+    test('旧版本配置缺少这些字段时的默认值（向后兼容）', () {
       // 模拟上一版写下的配置：没有 autoSystemProxy / autoSelectFastest
       final legacy = ProxyConfig.fromJson({
         'routeMode': 'auto',
@@ -38,9 +38,44 @@ void main() {
         'nodeSort': 'default',
       });
 
+      // 接管系统代理默认开：不开的话用户会以为"连上了却没生效"
       expect(legacy.autoSystemProxy, isTrue);
-      expect(legacy.autoSelectFastest, isTrue);
       expect(legacy.autoTestOnConnect, isTrue);
+      // 自动改用户选好的节点是坏体验，默认关
+      expect(legacy.autoSelectFastest, isFalse);
+      // 没手动选过
+      expect(legacy.nodeChosenByUser, isFalse);
+    });
+
+    test('用户手动选过节点后，自动选最快不该再覆盖它', () {
+      const chosen = ProxyConfig(
+        autoSelectFastest: true,
+        nodeChosenByUser: true,
+        selectedNodeTag: '我选的节点',
+      );
+
+      // 控制器的判据：两个都满足才会自动改
+      final shouldAutoSelect =
+          chosen.autoSelectFastest && !chosen.nodeChosenByUser;
+      expect(shouldAutoSelect, isFalse);
+      expect(chosen.selectedNodeTag, '我选的节点');
+    });
+
+    test('没手动选过且开了自动选最快时，才允许自动改', () {
+      const fresh = ProxyConfig(autoSelectFastest: true);
+      final shouldAutoSelect =
+          fresh.autoSelectFastest && !fresh.nodeChosenByUser;
+      expect(shouldAutoSelect, isTrue);
+    });
+
+    test('nodeChosenByUser 能正确往返', () {
+      const original = ProxyConfig(
+        selectedNodeTag: 'X',
+        nodeChosenByUser: true,
+      );
+      final restored = ProxyConfig.fromJson(original.toJson());
+      expect(restored.nodeChosenByUser, isTrue);
+      expect(restored.selectedNodeTag, 'X');
     });
 
     test('线程化整份配置后新字段保持不变', () {
