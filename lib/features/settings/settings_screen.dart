@@ -69,6 +69,15 @@ class SettingsScreen extends ConsumerWidget {
               state.config.proxy.copyWith(enableTun: value),
             ),
           ),
+          SwitchListTile(
+            secondary: const Icon(Icons.speed_outlined),
+            title: const Text('连接后自动测速'),
+            subtitle: const Text('连接成功后逐节点测一次延迟，便于按延迟排序'),
+            value: state.config.proxy.autoTestOnConnect,
+            onChanged: (value) => controller.updateProxy(
+              state.config.proxy.copyWith(autoTestOnConnect: value),
+            ),
+          ),
 
           const _SectionHeader('DNS'),
           ListTile(

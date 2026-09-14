@@ -51,11 +51,15 @@ class HomeScreen extends ConsumerWidget {
             Row(
               children: [
                 Text('节点', style: theme.textTheme.titleMedium),
-                const Spacer(),
+                const SizedBox(width: 8),
                 Text(
                   '${state.nodes.length} 个',
                   style: theme.textTheme.bodySmall,
                 ),
+                const Spacer(),
+                _SortButton(state: state),
+                const SizedBox(width: 4),
+                _TestButton(state: state),
               ],
             ),
             const SizedBox(height: 8),
@@ -87,15 +91,18 @@ class HomeScreen extends ConsumerWidget {
                   },
                   child: Column(
                     children: [
-                      for (var i = 0; i < state.nodes.length; i++) ...[
+                      for (var i = 0; i < state.sortedNodes.length; i++) ...[
                         if (i > 0) const Divider(height: 1),
                         RadioListTile<String>(
-                          value: state.nodes[i].tag,
-                          title: Text(state.nodes[i].tag),
+                          value: state.sortedNodes[i].tag,
+                          title: Text(state.sortedNodes[i].tag),
                           subtitle: Text(
-                            '${state.nodes[i].protocol.toUpperCase()} · '
-                            '${state.nodes[i].endpoint}',
+                            '${state.sortedNodes[i].protocol.toUpperCase()} · '
+                            '${state.sortedNodes[i].endpoint}',
                             style: theme.textTheme.bodySmall,
+                          ),
+                          secondary: _DelayBadge(
+                            delay: state.nodeDelays[state.sortedNodes[i].tag],
                           ),
                         ),
                       ],
@@ -324,4 +331,108 @@ String _formatDate(int epochSeconds) {
   final date = DateTime.fromMillisecondsSinceEpoch(epochSeconds * 1000);
   return '${date.year}-${date.month.toString().padLeft(2, '0')}-'
       '${date.day.toString().padLeft(2, '0')}';
+}
+
+/// 节点排序方式切换。
+class _SortButton extends ConsumerWidget {
+  const _SortButton({required this.state});
+
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final current = state.config.proxy.nodeSort;
+    return PopupMenuButton<NodeSortMode>(
+      tooltip: '排序方式',
+      initialValue: current,
+      onSelected: (mode) =>
+          ref.read(appControllerProvider.notifier).setNodeSort(mode),
+      itemBuilder: (context) => [
+        for (final mode in NodeSortMode.values)
+          PopupMenuItem<NodeSortMode>(
+            value: mode,
+            child: Row(
+              children: [
+                Icon(mode == current ? Icons.check : null, size: 18),
+                const SizedBox(width: 8),
+                Text(mode.label),
+              ],
+            ),
+          ),
+      ],
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.sort, size: 18),
+          const SizedBox(width: 4),
+          Text(current.label, style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ),
+    );
+  }
+}
+
+/// 一键对所有节点测速。
+class _TestButton extends ConsumerWidget {
+  const _TestButton({required this.state});
+
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final testing = state.testingNodes;
+    return TextButton.icon(
+      // 测速由内核经各节点发包，必须已连接
+      onPressed: (testing || !state.isRunning)
+          ? null
+          : ref.read(appControllerProvider.notifier).testAllNodes,
+      icon: testing
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.speed, size: 18),
+      label: Text(testing ? '测速中' : '测速'),
+    );
+  }
+}
+
+/// 单个节点的延迟徽标。
+class _DelayBadge extends StatelessWidget {
+  const _DelayBadge({required this.delay});
+
+  /// 毫秒；null 表示尚未测速，<= 0 表示测速失败。
+  final int? delay;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final value = delay;
+
+    if (value == null) {
+      return Text('—', style: TextStyle(color: theme.disabledColor));
+    }
+    if (value <= 0) {
+      return Text(
+        '超时',
+        style: TextStyle(
+          color: theme.colorScheme.error,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
+      );
+    }
+
+    final color = value < 200
+        ? const Color(0xFF16A34A)
+        : value < 500
+        ? const Color(0xFFCA8A04)
+        : const Color(0xFFDC2626);
+
+    return Text(
+      '$value ms',
+      style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600),
+    );
+  }
 }

@@ -57,6 +57,30 @@ enum DnsProvider {
   }
 }
 
+/// 节点列表的排序方式。
+enum NodeSortMode {
+  /// 保持订阅返回的原始顺序。
+  defaultOrder('default', '默认顺序'),
+
+  /// 按测速延迟从低到高；未测速或测速失败的排在最后。
+  delay('delay', '按延迟'),
+
+  /// 按节点名称排序。
+  name('name', '按名称');
+
+  const NodeSortMode(this.id, this.label);
+
+  final String id;
+  final String label;
+
+  static NodeSortMode fromId(String? id) {
+    return NodeSortMode.values.firstWhere(
+      (m) => m.id == id,
+      orElse: () => NodeSortMode.defaultOrder,
+    );
+  }
+}
+
 /// 界面上的三档模式预设。
 ///
 /// `safe` 等价于「自动分流 + 私密 DNS」，对应原 App 的 `safeDns` 开关。
@@ -232,6 +256,8 @@ class ProxyConfig {
     this.enableTun = false,
     this.logLevel = 'info',
     this.selectedNodeTag,
+    this.nodeSort = NodeSortMode.defaultOrder,
+    this.autoTestOnConnect = true,
   });
 
   final RouteMode routeMode;
@@ -247,6 +273,12 @@ class ProxyConfig {
   /// 上次选中的节点 tag，用于启动时恢复。
   final String? selectedNodeTag;
 
+  /// 节点列表排序方式。
+  final NodeSortMode nodeSort;
+
+  /// 连接成功后是否自动测速一次。
+  final bool autoTestOnConnect;
+
   ProxyConfig copyWith({
     RouteMode? routeMode,
     bool? safeDns,
@@ -258,6 +290,8 @@ class ProxyConfig {
     bool? enableTun,
     String? logLevel,
     String? selectedNodeTag,
+    NodeSortMode? nodeSort,
+    bool? autoTestOnConnect,
     bool clearSelectedNode = false,
   }) {
     return ProxyConfig(
@@ -273,6 +307,8 @@ class ProxyConfig {
       selectedNodeTag: clearSelectedNode
           ? null
           : (selectedNodeTag ?? this.selectedNodeTag),
+      nodeSort: nodeSort ?? this.nodeSort,
+      autoTestOnConnect: autoTestOnConnect ?? this.autoTestOnConnect,
     );
   }
 
@@ -287,6 +323,8 @@ class ProxyConfig {
     'enableTun': enableTun,
     'logLevel': logLevel,
     'selectedNodeTag': selectedNodeTag,
+    'nodeSort': nodeSort.id,
+    'autoTestOnConnect': autoTestOnConnect,
   };
 
   static ProxyConfig fromJson(Map<String, dynamic> json) => ProxyConfig(
@@ -300,6 +338,8 @@ class ProxyConfig {
     enableTun: (json['enableTun'] as bool?) ?? false,
     logLevel: (json['logLevel'] as String?) ?? 'info',
     selectedNodeTag: json['selectedNodeTag'] as String?,
+    nodeSort: NodeSortMode.fromId(json['nodeSort'] as String?),
+    autoTestOnConnect: (json['autoTestOnConnect'] as bool?) ?? true,
   );
 
   @override
@@ -314,7 +354,9 @@ class ProxyConfig {
       other.clashSecret == clashSecret &&
       other.enableTun == enableTun &&
       other.logLevel == logLevel &&
-      other.selectedNodeTag == selectedNodeTag;
+      other.selectedNodeTag == selectedNodeTag &&
+      other.nodeSort == nodeSort &&
+      other.autoTestOnConnect == autoTestOnConnect;
 
   @override
   int get hashCode => Object.hash(
@@ -328,6 +370,8 @@ class ProxyConfig {
     enableTun,
     logLevel,
     selectedNodeTag,
+    nodeSort,
+    autoTestOnConnect,
   );
 }
 

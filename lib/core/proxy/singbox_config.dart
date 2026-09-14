@@ -71,49 +71,59 @@ Map<String, dynamic> buildSingboxConfig({
     'interrupt_exist_connections': false,
   };
 
-  final config = <String, dynamic>{
-    'log': {'level': proxy.logLevel, 'timestamp': true},
-    'dns': buildDnsSection(proxy),
-    'inbounds': [
-      {
-        'type': 'mixed',
-        'tag': 'mixed-in',
-        'listen': listen,
-        'listen_port': mixedPort,
-      },
-    ],
-    'outbounds': [
-      selector,
-      ...outbounds,
-      {'type': 'direct', 'tag': 'direct'},
-    ],
-    'route': buildRouteSection(proxy, availableRuleSets),
-    'experimental': {
-      'clash_api': {
-        'external_controller': '$listen:$clashPort',
-        'secret': clashSecret,
-      },
+  // ⚠️ 这些嵌套 map 必须写成显式类型的字面量。
+  //
+  // 如果写成无上下文的 `{'clash_api': {...}}`，Dart 会把它推断成
+  // `Map<String, Map<String, String>>` 这种**窄类型**。后面再
+  // `as Map<String, dynamic>` 虽然编译能过、转型也能成功（Dart 泛型是协变的），
+  // 但底层对象仍是那个窄类型，往里写别的形状的值就会在运行时抛：
+  //   type '_Map<String, Object>' is not a subtype of type 'Map<String, String>'
+  // 这个坑在 release 构建里才会暴露，静态分析看不出来。
+  final experimental = <String, dynamic>{
+    'clash_api': <String, dynamic>{
+      'external_controller': '$listen:$clashPort',
+      'secret': clashSecret,
     },
   };
-
   if (cachePath != null) {
-    (config['experimental'] as Map<String, dynamic>)['cache_file'] = {
+    experimental['cache_file'] = <String, dynamic>{
       'enabled': true,
       'path': cachePath,
     };
   }
 
+  final inbounds = <Map<String, dynamic>>[
+    <String, dynamic>{
+      'type': 'mixed',
+      'tag': 'mixed-in',
+      'listen': listen,
+      'listen_port': mixedPort,
+    },
+  ];
   if (proxy.enableTun) {
-    (config['inbounds'] as List).add({
+    inbounds.add(<String, dynamic>{
       'type': 'tun',
       'tag': 'tun-in',
-      'address': ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
+      'address': <String>['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
       'mtu': 9000,
       'auto_route': true,
       'strict_route': true,
       'stack': 'mixed',
     });
   }
+
+  final config = <String, dynamic>{
+    'log': <String, dynamic>{'level': proxy.logLevel, 'timestamp': true},
+    'dns': buildDnsSection(proxy),
+    'inbounds': inbounds,
+    'outbounds': <Map<String, dynamic>>[
+      selector,
+      ...outbounds,
+      <String, dynamic>{'type': 'direct', 'tag': 'direct'},
+    ],
+    'route': buildRouteSection(proxy, availableRuleSets),
+    'experimental': experimental,
+  };
 
   return config;
 }

@@ -72,6 +72,8 @@ class AppState {
     this.coreLogs = const [],
     this.recoveredFromCorruption = false,
     this.corruptBackupPath,
+    this.nodeDelays = const {},
+    this.testingNodes = false,
   });
 
   final AppConfig config;
@@ -90,6 +92,14 @@ class AppState {
 
   final bool recoveredFromCorruption;
   final String? corruptBackupPath;
+
+  /// 测速结果：节点 tag -> 延迟（毫秒）。
+  ///
+  /// 未测速的节点不在表里；测速失败的记为 [failedDelay]。
+  final Map<String, int> nodeDelays;
+
+  /// 是否正在批量测速。
+  final bool testingNodes;
 
   bool get isRunning => coreStatus == CoreStatus.running;
   bool get isBusy => busy || coreStatus == CoreStatus.starting;
@@ -111,6 +121,30 @@ class AppState {
     return null;
   }
 
+  /// 测速失败的哨兵值。
+  static const int failedDelay = -1;
+
+  /// 按当前排序方式排好序的节点列表。
+  List<ProxyNode> get sortedNodes {
+    final list = List<ProxyNode>.of(nodes);
+    switch (config.proxy.nodeSort) {
+      case NodeSortMode.defaultOrder:
+        break;
+      case NodeSortMode.name:
+        list.sort((a, b) => a.tag.compareTo(b.tag));
+      case NodeSortMode.delay:
+        list.sort((a, b) => _delayRank(a.tag).compareTo(_delayRank(b.tag)));
+    }
+    return list;
+  }
+
+  /// 排序用的延迟排名：可用延迟按数值排，失败与未测速一律排到最后。
+  int _delayRank(String tag) {
+    final delay = nodeDelays[tag];
+    if (delay == null || delay <= 0) return 1 << 30;
+    return delay;
+  }
+
   AppState copyWith({
     AppConfig? config,
     CoreStatus? coreStatus,
@@ -122,6 +156,8 @@ class AppState {
     List<String>? coreLogs,
     bool? recoveredFromCorruption,
     String? corruptBackupPath,
+    Map<String, int>? nodeDelays,
+    bool? testingNodes,
     bool clearError = false,
     bool clearNotice = false,
     bool clearSubscription = false,
@@ -140,6 +176,8 @@ class AppState {
       recoveredFromCorruption:
           recoveredFromCorruption ?? this.recoveredFromCorruption,
       corruptBackupPath: corruptBackupPath ?? this.corruptBackupPath,
+      nodeDelays: nodeDelays ?? this.nodeDelays,
+      testingNodes: testingNodes ?? this.testingNodes,
     );
   }
 }
@@ -352,6 +390,8 @@ class AppController extends Notifier<AppState> {
         busy: false,
         nodes: nodes,
         subscription: info,
+        // 节点换了，旧的测速结果不再有意义
+        nodeDelays: const {},
         notice: '已获取 ${nodes.length} 个节点',
       );
     } on Object catch (e) {
@@ -374,6 +414,55 @@ class AppController extends Notifier<AppState> {
         state = state.copyWith(error: '切换节点失败：$e');
       }
     }
+  }
+
+  /// 切换节点列表的排序方式。
+  Future<void> setNodeSort(NodeSortMode mode) async {
+    await updateProxy(state.config.proxy.copyWith(nodeSort: mode));
+  }
+
+  /// 批量测速。
+  ///
+  /// 走 Clash API，由内核**经由每个节点**发一次小请求，所以必须在内核运行中调用。
+  /// 结果分批写入 state，界面可以边测边刷新，不用等全部跑完。
+  Future<void> testAllNodes() async {
+    final core = _core;
+    if (core is! ProcessProxyCore) {
+      state = state.copyWith(error: '请先连接，再测速');
+      return;
+    }
+    if (state.testingNodes || state.nodes.isEmpty) return;
+
+    final tags = state.nodes.map((n) => n.tag).toList();
+    state = state.copyWith(
+      testingNodes: true,
+      nodeDelays: const {},
+      clearError: true,
+    );
+
+    final results = <String, int>{};
+    // 并发太高会让内核同时开太多连接，反而把延迟测歪；4 是个稳妥值。
+    const concurrency = 4;
+    for (var i = 0; i < tags.length; i += concurrency) {
+      final batch = tags.skip(i).take(concurrency).toList();
+      await Future.wait(
+        batch.map((tag) async {
+          final delay = await core.testDelay(tag);
+          results[tag] = delay == null || delay <= 0
+              ? AppState.failedDelay
+              : delay;
+          // 每测完一个就刷新一次，界面立刻能看到结果
+          state = state.copyWith(nodeDelays: Map<String, int>.of(results));
+        }),
+      );
+    }
+
+    final ok = results.values.where((d) => d > 0).length;
+    state = state.copyWith(
+      testingNodes: false,
+      nodeDelays: results,
+      notice: '测速完成：$ok / ${tags.length} 个节点可用',
+    );
   }
 
   // -- 内核生命周期 -------------------------------------------------------
@@ -439,6 +528,11 @@ class AppController extends Notifier<AppState> {
         configJson: encodeConfig(config),
         workingDirectory: provision.workingDirectory,
       );
+
+      // 连接成功后自动测一轮速，让节点列表直接带上延迟并按需排序。
+      if (state.isRunning && state.config.proxy.autoTestOnConnect) {
+        unawaited(testAllNodes());
+      }
     } on Object catch (e) {
       state = state.copyWith(busy: false, error: '启动失败：$e');
     }

@@ -239,4 +239,48 @@ class ProcessProxyCore implements ProxyCore {
       ),
     );
   }
+
+  /// 测速用的目标地址。
+  ///
+  /// Clash API 会**经由被测节点**请求它，因此不要求本机直连可达。
+  /// `generate_204` 是各家客户端约定俗成的测速端点，响应体极小。
+  static const String defaultTestUrl = 'http://www.gstatic.com/generate_204';
+
+  /// 通过 Clash API 测试单个节点的延迟。
+  ///
+  /// 返回毫秒数；超时或失败返回 `null`。**不抛异常**，方便批量测速时逐个降级。
+  Future<int?> testDelay(
+    String nodeTag, {
+    String url = defaultTestUrl,
+    int timeoutMs = 5000,
+  }) async {
+    final httpTransport = transport;
+    if (httpTransport == null) throw StateError('未提供 HttpTransport');
+
+    final query = Uri(queryParameters: {'timeout': '$timeoutMs', 'url': url})
+        .query;
+
+    try {
+      final response = await httpTransport.send(
+        ApiRequest(
+          method: 'GET',
+          url:
+              'http://127.0.0.1:$clashPort/proxies/'
+              '${Uri.encodeComponent(nodeTag)}/delay?$query',
+          headers: _clashHeaders,
+          timeout: Duration(milliseconds: timeoutMs + 3000),
+        ),
+      );
+      if (!response.isOk) return null;
+
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) return null;
+      final delay = decoded['delay'];
+      if (delay is int) return delay;
+      if (delay is num) return delay.toInt();
+      return null;
+    } on Object {
+      return null;
+    }
+  }
 }
