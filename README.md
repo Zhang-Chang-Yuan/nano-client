@@ -111,6 +111,11 @@ DNS 查询在代理隧道内完成，本地 ISP 既看不到内容也无从劫�
 
 细节见 [`docs/CONFIG.md`](docs/CONFIG.md)。
 
+> **打不开海外站点？** 先看 [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)。
+> 最常见的三个原因：浏览器需要重启才能读到系统代理、
+> **Flatpak 版浏览器看不到系统代理**（沙箱里没有 dconf 权限）、
+> 以及 `ping` 本来就不走代理（ICMP 需要 TUN 模式）。
+
 ---
 
 ## 项目结构
