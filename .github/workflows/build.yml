@@ -48,6 +48,21 @@ jobs:
       - name: 安装依赖
         run: flutter pub get
 
+      # 守卫：`.gitignore` 的规则一旦写得过宽（例如把根目录的 config/
+      # 写成 config/ 而不是 /config/），会把 lib/ 下的源文件静默排除出仓库，
+      # 表现为 CI 上一堆莫名其妙的 "Target of URI doesn't exist"。
+      # 这里直接检查有没有源文件被忽略掉。
+      - name: 确保没有源文件被 .gitignore 误伤
+        run: |
+          ignored=$(git ls-files --others --ignored --exclude-standard -- \
+            'lib/**/*.dart' 'test/**/*.dart' 'tool/**/*.dart' || true)
+          if [ -n "$ignored" ]; then
+            echo "::error::以下源文件被 .gitignore 忽略，不会进入仓库："
+            echo "$ignored"
+            exit 1
+          fi
+          echo "源文件未被误伤"
+
       - name: 代码格式检查
         run: dart format --output=none --set-exit-if-changed lib test tool
 
