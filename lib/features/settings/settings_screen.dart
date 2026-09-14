@@ -78,6 +78,29 @@ class SettingsScreen extends ConsumerWidget {
               state.config.proxy.copyWith(autoTestOnConnect: value),
             ),
           ),
+          SwitchListTile(
+            secondary: const Icon(Icons.check_circle_outline),
+            title: const Text('测速后自动选最快'),
+            subtitle: const Text('测速完成后自动切到延迟最低的节点，省去连上再换线'),
+            value: state.config.proxy.autoSelectFastest,
+            onChanged: (value) => controller.updateProxy(
+              state.config.proxy.copyWith(autoSelectFastest: value),
+            ),
+          ),
+
+          SwitchListTile(
+            secondary: const Icon(Icons.language),
+            title: const Text('自动接管系统代理'),
+            subtitle: Text(
+              state.systemProxyActive
+                  ? '当前已接管；断开时自动还原'
+                  : '连接时把系统代理指向本地端口，断开时还原',
+            ),
+            value: state.config.proxy.autoSystemProxy,
+            onChanged: (value) => controller.updateProxy(
+              state.config.proxy.copyWith(autoSystemProxy: value),
+            ),
+          ),
 
           const _SectionHeader('DNS'),
           ListTile(

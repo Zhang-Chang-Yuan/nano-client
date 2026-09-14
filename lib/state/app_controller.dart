@@ -18,6 +18,7 @@ import '../core/config/config_repository.dart';
 import '../core/proxy/core_provisioner.dart';
 import '../core/proxy/proxy_core.dart';
 import '../core/proxy/singbox_config.dart';
+import '../core/proxy/system_proxy.dart';
 import '../core/subscription/proxy_node.dart';
 
 /// 配置下发地址候选，来自 APK 逆向（见 doc/01-recon.md §4.1）。
@@ -74,6 +75,8 @@ class AppState {
     this.corruptBackupPath,
     this.nodeDelays = const {},
     this.testingNodes = false,
+    this.systemProxyActive = false,
+    this.systemProxyDetail,
   });
 
   final AppConfig config;
@@ -101,7 +104,16 @@ class AppState {
   /// 是否正在批量测速。
   final bool testingNodes;
 
+  /// 系统代理是否已被本应用接管。
+  final bool systemProxyActive;
+
+  /// 接管失败时的原因。
+  final String? systemProxyDetail;
+
   bool get isRunning => coreStatus == CoreStatus.running;
+
+  /// 真正"连上了"：内核在跑，且系统代理已接管。
+  bool get isConnected => isRunning && systemProxyActive;
   bool get isBusy => busy || coreStatus == CoreStatus.starting;
 
   /// 是否需要引导用户进入服务器配置向导。
@@ -158,6 +170,8 @@ class AppState {
     String? corruptBackupPath,
     Map<String, int>? nodeDelays,
     bool? testingNodes,
+    bool? systemProxyActive,
+    String? systemProxyDetail,
     bool clearError = false,
     bool clearNotice = false,
     bool clearSubscription = false,
@@ -178,6 +192,8 @@ class AppState {
       corruptBackupPath: corruptBackupPath ?? this.corruptBackupPath,
       nodeDelays: nodeDelays ?? this.nodeDelays,
       testingNodes: testingNodes ?? this.testingNodes,
+      systemProxyActive: systemProxyActive ?? this.systemProxyActive,
+      systemProxyDetail: systemProxyDetail ?? this.systemProxyDetail,
     );
   }
 }
@@ -189,6 +205,8 @@ class AppState {
 class AppController extends Notifier<AppState> {
   ProxyCore? _core;
   StreamSubscription<CoreEvent>? _coreSubscription;
+  static const _systemProxy = SystemProxyController();
+  bool _systemProxyApplied = false;
   List<String> _availableRuleSets = const [];
 
   @override
@@ -423,15 +441,29 @@ class AppController extends Notifier<AppState> {
 
   /// 批量测速。
   ///
-  /// 走 Clash API，由内核**经由每个节点**发一次小请求，所以必须在内核运行中调用。
-  /// 结果分批写入 state，界面可以边测边刷新，不用等全部跑完。
+  /// 走 Clash API，由内核**经由每个节点**发一次小请求，所以需要内核在运行。
+  /// 为了不必"先连接才能测速"，这里会在需要时**静默把内核拉起来**；
+  /// 这一步**不接管系统代理** —— 用户只是想先看看哪个节点快。
+  ///
+  /// 测完若开启了 [ProxyConfig.autoSelectFastest]，会切到延迟最低的节点，
+  /// 这样随后点连接就直接用最快的线路，不用连上再换。
   Future<void> testAllNodes() async {
-    final core = _core;
-    if (core is! ProcessProxyCore) {
-      state = state.copyWith(error: '请先连接，再测速');
-      return;
-    }
     if (state.testingNodes || state.nodes.isEmpty) return;
+
+    if (!state.isRunning) {
+      state = state.copyWith(busy: true, clearError: true);
+      try {
+        final started = await _startCore();
+        state = state.copyWith(busy: false);
+        if (!started) return; // _startCore 已经写入错误
+      } on Object catch (e) {
+        state = state.copyWith(busy: false, error: '启动内核失败：$e');
+        return;
+      }
+    }
+
+    final core = _core;
+    if (core is! ProcessProxyCore) return;
 
     final tags = state.nodes.map((n) => n.tag).toList();
     state = state.copyWith(
@@ -463,6 +495,29 @@ class AppController extends Notifier<AppState> {
       nodeDelays: results,
       notice: '测速完成：$ok / ${tags.length} 个节点可用',
     );
+
+    if (state.config.proxy.autoSelectFastest) {
+      final fastest = _fastestTag(results, tags);
+      if (fastest != null && fastest != state.selectedNodeTag) {
+        await selectNode(fastest);
+        state = state.copyWith(notice: '已自动选择最快的节点：$fastest');
+      }
+    }
+  }
+
+  /// 在测速结果里挑延迟最低的；全部失败时返回 null。
+  String? _fastestTag(Map<String, int> results, List<String> order) {
+    String? best;
+    var bestDelay = 1 << 30;
+    for (final tag in order) {
+      final delay = results[tag];
+      if (delay == null || delay <= 0) continue;
+      if (delay < bestDelay) {
+        bestDelay = delay;
+        best = tag;
+      }
+    }
+    return best;
   }
 
   // -- 内核生命周期 -------------------------------------------------------
@@ -488,50 +543,69 @@ class AppController extends Notifier<AppState> {
     }
   }
 
+  /// 只把内核拉起来，**不接管系统代理**。
+  ///
+  /// 测速也需要内核（要经各节点发包），所以这一步被 connect 与 testAllNodes 共用。
+  /// 返回内核是否处于运行状态。
+  Future<bool> _startCore() async {
+    if (state.isRunning) return true;
+
+    if (state.nodes.isEmpty) {
+      await refreshSubscription();
+      if (state.nodes.isEmpty) return false;
+    }
+
+    final provision = await _provisionCore();
+    final config = buildSingboxConfig(
+      nodes: state.nodes,
+      proxy: state.config.proxy,
+      availableRuleSets: _availableRuleSets,
+      listen: state.config.proxy.listen,
+      mixedPort: state.config.proxy.mixedPort,
+      clashPort: state.config.proxy.clashPort,
+      clashSecret: state.config.proxy.clashSecret,
+      cachePath: '${provision.workingDirectory}/cache.db',
+      defaultNodeTag: state.selectedNodeTag,
+    );
+
+    final core = ProcessProxyCore(
+      executablePath: provision.executablePath,
+      mixedPort: state.config.proxy.mixedPort,
+      clashPort: state.config.proxy.clashPort,
+      clashSecret: state.config.proxy.clashSecret,
+      transport: ref.read(httpTransportProvider),
+    );
+    await _coreSubscription?.cancel();
+    _coreSubscription = core.events.listen(_onCoreEvent);
+    _core = core;
+
+    await core.start(
+      configJson: encodeConfig(config),
+      workingDirectory: provision.workingDirectory,
+    );
+    return state.isRunning;
+  }
+
+  /// 连接：拉起内核，并把系统代理指向它。
   Future<void> connect() async {
-    if (state.isRunning || state.busy) return;
-    state = state.copyWith(busy: true, clearError: true, coreLogs: const []);
+    // 内核在跑但系统代理没接管时，这一下是"接管"，不能直接返回
+    if (state.busy) return;
+    if (state.isRunning && state.systemProxyActive) return;
+
+    state = state.copyWith(busy: true, clearError: true);
 
     try {
-      if (state.nodes.isEmpty) {
-        await refreshSubscription();
-        if (state.nodes.isEmpty) {
-          state = state.copyWith(busy: false);
-          return;
-        }
+      final started = await _startCore();
+      if (!started) {
+        state = state.copyWith(busy: false);
+        return;
       }
 
-      final provision = await _provisionCore();
-      final config = buildSingboxConfig(
-        nodes: state.nodes,
-        proxy: state.config.proxy,
-        availableRuleSets: _availableRuleSets,
-        listen: state.config.proxy.listen,
-        mixedPort: state.config.proxy.mixedPort,
-        clashPort: state.config.proxy.clashPort,
-        clashSecret: state.config.proxy.clashSecret,
-        cachePath: '${provision.workingDirectory}/cache.db',
-        defaultNodeTag: state.selectedNodeTag,
-      );
+      await _applySystemProxy();
+      state = state.copyWith(busy: false);
 
-      final core = ProcessProxyCore(
-        executablePath: provision.executablePath,
-        mixedPort: state.config.proxy.mixedPort,
-        clashPort: state.config.proxy.clashPort,
-        clashSecret: state.config.proxy.clashSecret,
-        transport: ref.read(httpTransportProvider),
-      );
-      await _coreSubscription?.cancel();
-      _coreSubscription = core.events.listen(_onCoreEvent);
-      _core = core;
-
-      await core.start(
-        configJson: encodeConfig(config),
-        workingDirectory: provision.workingDirectory,
-      );
-
-      // 连接成功后自动测一轮速，让节点列表直接带上延迟并按需排序。
-      if (state.isRunning && state.config.proxy.autoTestOnConnect) {
+      // 连接后自动测一轮速，让节点列表直接带上延迟并自动选最快
+      if (state.config.proxy.autoTestOnConnect) {
         unawaited(testAllNodes());
       }
     } on Object catch (e) {
@@ -539,7 +613,51 @@ class AppController extends Notifier<AppState> {
     }
   }
 
+  /// 把系统代理指向本应用的本地端口。
+  Future<void> _applySystemProxy() async {
+    if (!state.config.proxy.autoSystemProxy) {
+      state = state.copyWith(
+        systemProxyActive: false,
+        systemProxyDetail: '已在设置中关闭自动接管，需手动配置代理',
+      );
+      return;
+    }
+    if (!_systemProxy.isSupported) {
+      state = state.copyWith(
+        systemProxyActive: false,
+        systemProxyDetail: '当前平台不支持自动设置，请手动配置代理',
+      );
+      return;
+    }
+
+    final host = state.config.proxy.listen == '0.0.0.0'
+        ? '127.0.0.1'
+        : state.config.proxy.listen;
+    final result = await _systemProxy.enable(
+      host: host,
+      port: state.config.proxy.mixedPort,
+    );
+    _systemProxyApplied = result.ok;
+    state = state.copyWith(
+      systemProxyActive: result.ok,
+      systemProxyDetail: result.ok ? null : result.detail,
+    );
+  }
+
+  /// 还原系统代理。
+  Future<void> _clearSystemProxy() async {
+    if (!_systemProxyApplied) {
+      state = state.copyWith(systemProxyActive: false);
+      return;
+    }
+    await _systemProxy.disable();
+    _systemProxyApplied = false;
+    state = state.copyWith(systemProxyActive: false, systemProxyDetail: null);
+  }
+
   Future<void> stop() async {
+    await _clearSystemProxy();
+
     final core = _core;
     if (core == null) {
       state = state.copyWith(coreStatus: CoreStatus.stopped, busy: false);
@@ -549,7 +667,14 @@ class AppController extends Notifier<AppState> {
     state = state.copyWith(coreStatus: CoreStatus.stopped, busy: false);
   }
 
-  Future<void> toggle() => state.isRunning ? stop() : connect();
+  /// 电源按钮：已接管则断开，否则（含"内核在跑但没接管"）执行接管。
+  Future<void> toggle() async {
+    if (state.isConnected) {
+      await stop();
+    } else {
+      await connect();
+    }
+  }
 
   void _onCoreEvent(CoreEvent event) {
     final logs = [...state.coreLogs];

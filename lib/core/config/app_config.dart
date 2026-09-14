@@ -258,6 +258,8 @@ class ProxyConfig {
     this.selectedNodeTag,
     this.nodeSort = NodeSortMode.defaultOrder,
     this.autoTestOnConnect = true,
+    this.autoSelectFastest = true,
+    this.autoSystemProxy = true,
   });
 
   final RouteMode routeMode;
@@ -279,6 +281,15 @@ class ProxyConfig {
   /// 连接成功后是否自动测速一次。
   final bool autoTestOnConnect;
 
+  /// 测速后是否自动切到延迟最低的节点。
+  final bool autoSelectFastest;
+
+  /// 连接时是否自动接管系统代理。
+  ///
+  /// 桌面端起内核只是开了个本地端口，浏览器默认不走它；
+  /// 打开这一项后，连接会同时把系统代理指向该端口，断开时还原。
+  final bool autoSystemProxy;
+
   ProxyConfig copyWith({
     RouteMode? routeMode,
     bool? safeDns,
@@ -292,6 +303,8 @@ class ProxyConfig {
     String? selectedNodeTag,
     NodeSortMode? nodeSort,
     bool? autoTestOnConnect,
+    bool? autoSelectFastest,
+    bool? autoSystemProxy,
     bool clearSelectedNode = false,
   }) {
     return ProxyConfig(
@@ -309,6 +322,8 @@ class ProxyConfig {
           : (selectedNodeTag ?? this.selectedNodeTag),
       nodeSort: nodeSort ?? this.nodeSort,
       autoTestOnConnect: autoTestOnConnect ?? this.autoTestOnConnect,
+      autoSelectFastest: autoSelectFastest ?? this.autoSelectFastest,
+      autoSystemProxy: autoSystemProxy ?? this.autoSystemProxy,
     );
   }
 
@@ -325,6 +340,8 @@ class ProxyConfig {
     'selectedNodeTag': selectedNodeTag,
     'nodeSort': nodeSort.id,
     'autoTestOnConnect': autoTestOnConnect,
+    'autoSelectFastest': autoSelectFastest,
+    'autoSystemProxy': autoSystemProxy,
   };
 
   static ProxyConfig fromJson(Map<String, dynamic> json) => ProxyConfig(
@@ -340,6 +357,8 @@ class ProxyConfig {
     selectedNodeTag: json['selectedNodeTag'] as String?,
     nodeSort: NodeSortMode.fromId(json['nodeSort'] as String?),
     autoTestOnConnect: (json['autoTestOnConnect'] as bool?) ?? true,
+    autoSelectFastest: (json['autoSelectFastest'] as bool?) ?? true,
+    autoSystemProxy: (json['autoSystemProxy'] as bool?) ?? true,
   );
 
   @override
@@ -356,7 +375,9 @@ class ProxyConfig {
       other.logLevel == logLevel &&
       other.selectedNodeTag == selectedNodeTag &&
       other.nodeSort == nodeSort &&
-      other.autoTestOnConnect == autoTestOnConnect;
+      other.autoTestOnConnect == autoTestOnConnect &&
+      other.autoSelectFastest == autoSelectFastest &&
+      other.autoSystemProxy == autoSystemProxy;
 
   @override
   int get hashCode => Object.hash(
@@ -372,6 +393,8 @@ class ProxyConfig {
     selectedNodeTag,
     nodeSort,
     autoTestOnConnect,
+    autoSelectFastest,
+    autoSystemProxy,
   );
 }
 

@@ -171,11 +171,8 @@ class _ConnectCard extends StatelessWidget {
               textAlign: TextAlign.center,
             ),
             if (running) ...[
-              const SizedBox(height: 8),
-              Text(
-                'SOCKS5 / HTTP  ${state.config.proxy.listen}:${state.config.proxy.mixedPort}',
-                style: theme.textTheme.bodySmall,
-              ),
+              const SizedBox(height: 12),
+              _ProxyAddress(state: state),
             ],
           ],
         ),
@@ -382,8 +379,8 @@ class _TestButton extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final testing = state.testingNodes;
     return TextButton.icon(
-      // 测速由内核经各节点发包，必须已连接
-      onPressed: (testing || !state.isRunning)
+      // 未连接也可测速：需要时会在后台静默把内核拉起来，但不接管系统代理
+      onPressed: (testing || state.nodes.isEmpty)
           ? null
           : ref.read(appControllerProvider.notifier).testAllNodes,
       icon: testing
@@ -433,6 +430,57 @@ class _DelayBadge extends StatelessWidget {
     return Text(
       '$value ms',
       style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600),
+    );
+  }
+}
+
+/// 展示本地代理地址，并说明系统代理是否已接管。
+class _ProxyAddress extends StatelessWidget {
+  const _ProxyAddress({required this.state});
+
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final address =
+        '${state.config.proxy.listen}:${state.config.proxy.mixedPort}';
+
+    return Column(
+      children: [
+        SelectableText(
+          'SOCKS5 / HTTP  $address',
+          style: theme.textTheme.bodySmall,
+        ),
+        const SizedBox(height: 6),
+        if (state.systemProxyActive)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.check_circle, size: 14, color: scheme.primary),
+              const SizedBox(width: 4),
+              Text('已接管系统代理', style: theme.textTheme.bodySmall),
+            ],
+          )
+        else
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.info_outline, size: 14, color: scheme.error),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(
+                  state.systemProxyDetail ?? '尚未接管系统代理',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: scheme.error,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ],
+          ),
+      ],
     );
   }
 }
