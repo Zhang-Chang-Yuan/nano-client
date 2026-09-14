@@ -107,11 +107,39 @@ class SettingsScreen extends ConsumerWidget {
                   ? '当前已接管；断开时自动还原'
                   : '连接时把系统代理指向本地端口，断开时还原',
             ),
+            isThreeLine: true,
             value: state.config.proxy.autoSystemProxy,
             onChanged: (value) => controller.updateProxy(
               state.config.proxy.copyWith(autoSystemProxy: value),
             ),
           ),
+          if (state.config.proxy.autoSystemProxy &&
+              !state.config.proxy.enableTun)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.info_outline,
+                    size: 15,
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      // 实测踩到过：Flatpak 沙箱里读不到 GNOME 系统代理，
+                      // 浏览器会一直直连，表现为"应用说已接管、浏览器却打不开"
+                      'Flatpak 版浏览器（Firefox / Chromium）在沙箱里读不到系统代理，'
+                      '用它的话请改用 TUN 模式',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
 
           const _SectionHeader('DNS'),
           ListTile(
