@@ -114,7 +114,7 @@ Map<String, dynamic> buildSingboxConfig({
 
   final config = <String, dynamic>{
     'log': <String, dynamic>{'level': proxy.logLevel, 'timestamp': true},
-    'dns': buildDnsSection(proxy),
+    'dns': buildDnsSection(proxy, availableRuleSets: availableRuleSets),
     'inbounds': inbounds,
     'outbounds': <Map<String, dynamic>>[
       selector,
@@ -129,28 +129,62 @@ Map<String, dynamic> buildSingboxConfig({
 }
 
 /// 构造 `dns` 段。
-Map<String, dynamic> buildDnsSection(ProxyConfig proxy) {
-  // 私密 DNS：DoT（TCP + TLS）经代理隧道，本地 ISP 看不到内容也无从劫持。
+///
+/// ⚠️ 这里有个实测踩过的坑：**自动分流模式下不能所有域名都走本地明文 DNS**。
+/// 明文查询境外域名会被投毒 —— 实测 `www.google.com` 被解析成
+/// `104.244.42.197`（一个 Twitter 的 IP），内核拿着假 IP 去连必然失败。
+///
+/// 正确做法是分开：
+///   * 国内域名 -> 本地明文 DNS（快，且国内解析本来就没问题）
+///   * 其余域名 -> 加密 DNS 并经代理隧道（ISP 看不到，也无从投毒）
+Map<String, dynamic> buildDnsSection(
+  ProxyConfig proxy, {
+  List<String> availableRuleSets = const [],
+}) {
+  // 私密 DNS：DoT（TCP + TLS）经代理隧道。
   // 全局模式同样使用加密 DNS，避免「全局」下仍发生 DNS 泄漏。
   final secure = proxy.safeDns || proxy.routeMode == RouteMode.global;
-  final type = secure ? 'tls' : 'udp';
+  final primary = proxy.dnsProvider.primary;
 
   final servers = <Map<String, dynamic>>[
+    // 只用于解析「代理节点自身的域名」，必须直连且稳定
     {'type': 'udp', 'tag': 'dns-bootstrap', 'server': kBootstrapDns},
   ];
-  for (final entry in {
-    'dns-main': proxy.dnsProvider.primary,
-    'dns-alt': proxy.dnsProvider.secondary,
-  }.entries) {
+
+  if (secure) {
     servers.add({
-      'type': type,
-      'tag': entry.key,
-      'server': entry.value,
-      if (secure) 'detour': 'proxy',
+      'type': 'tls',
+      'tag': 'dns-main',
+      'server': primary,
+      'detour': 'proxy',
+    });
+    return {'servers': servers, 'strategy': 'prefer_ipv4', 'final': 'dns-main'};
+  }
+
+  servers.add({'type': 'udp', 'tag': 'dns-local', 'server': kBootstrapDns});
+  servers.add({
+    'type': 'tls',
+    'tag': 'dns-remote',
+    'server': primary,
+    'detour': 'proxy',
+  });
+
+  // 只有拿到 geosite-cn 才能把国内域名单独分出去；
+  // 拿不到就全部走加密远程解析 —— 慢一点，但绝不会被投毒。
+  final rules = <Map<String, dynamic>>[];
+  if (availableRuleSets.contains('geosite-cn')) {
+    rules.add({
+      'rule_set': ['geosite-cn'],
+      'server': 'dns-local',
     });
   }
 
-  return {'servers': servers, 'strategy': 'prefer_ipv4', 'final': 'dns-main'};
+  return {
+    'servers': servers,
+    if (rules.isNotEmpty) 'rules': rules,
+    'strategy': 'prefer_ipv4',
+    'final': 'dns-remote',
+  };
 }
 
 /// 构造 `route` 段。

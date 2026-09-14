@@ -471,7 +471,8 @@ class _ProxyAddress extends StatelessWidget {
               const SizedBox(width: 4),
               Flexible(
                 child: Text(
-                  state.systemProxyDetail ?? '尚未接管系统代理',
+                  // 没有具体原因时给出可操作的指引，而不是干巴巴一句"未接管"
+                  state.systemProxyDetail ?? '内核已就绪，点上方电源键接管系统代理',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: scheme.error,
                   ),

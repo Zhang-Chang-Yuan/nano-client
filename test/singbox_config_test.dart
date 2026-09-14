@@ -73,11 +73,45 @@ void main() {
       );
     });
 
-    test('DNS 使用明文且不经过代理', () {
-      final servers = dnsServersOf(config);
-      final main = servers.firstWhere((s) => s['tag'] == 'dns-main');
-      expect(main['type'], 'udp');
-      expect(main.containsKey('detour'), isFalse);
+    // 回归：曾经所有域名都走本地明文 DNS，导致境外域名被投毒 ——
+    // 实测 www.google.com 被解析成 104.244.42.197（一个 Twitter 的 IP），
+    // 内核拿着假 IP 去连必然失败。
+    test('国内域名走本地明文 DNS', () {
+      final local = dnsServersOf(config)
+          .firstWhere((s) => s['tag'] == 'dns-local');
+      expect(local['type'], 'udp');
+      expect(local.containsKey('detour'), isFalse);
+    });
+
+    test('其余域名走加密 DNS 并经代理，避免被投毒', () {
+      final remote = dnsServersOf(config)
+          .firstWhere((s) => s['tag'] == 'dns-remote');
+      expect(remote['type'], 'tls');
+      expect(remote['detour'], 'proxy');
+
+      final dns = config['dns'] as Map<String, dynamic>;
+      expect(dns['final'], 'dns-remote');
+
+      final rules = (dns['rules'] as List).cast<Map<String, dynamic>>();
+      expect(
+        rules.any(
+          (r) => (r['rule_set'] as List?)?.contains('geosite-cn') ?? false,
+        ),
+        isTrue,
+      );
+    });
+
+    test('缺少 geosite-cn 时全部走加密解析，绝不回落成明文', () {
+      final degraded = build(const ProxyConfig(), ruleSets: const []);
+      final dns = degraded['dns'] as Map<String, dynamic>;
+      expect(dns['final'], 'dns-remote');
+      expect(dns.containsKey('rules'), isFalse);
+
+      final remote = (dns['servers'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((s) => s['tag'] == 'dns-remote');
+      expect(remote['type'], 'tls');
+      expect(remote['detour'], 'proxy');
     });
 
     test('缺少规则集时自动退化为更粗的分流，但不报错', () {

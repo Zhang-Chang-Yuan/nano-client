@@ -1,11 +1,16 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nano_client/core/config/app_config.dart';
+
+import 'dart:io';
+
+import 'package:nano_client/core/proxy/latency_tester.dart';
 import 'package:nano_client/core/proxy/proxy_core.dart';
 import 'package:nano_client/core/proxy/system_proxy.dart';
 import 'package:nano_client/state/app_controller.dart';
 
 void main() {
   _sessionEnvTests();
+  _tcpLatencyTests();
 
   group('新增代理设置的序列化', () {
     test('自动接管系统代理 / 自动选最快 能往返', () {
@@ -110,6 +115,41 @@ void _sessionEnvTests() {
 
     test('两者都拿不到时返回空表，不去猜路径', () {
       expect(linuxSessionEnv(const {}), isEmpty);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// TCP 延迟测量（不依赖内核）
+// ---------------------------------------------------------------------------
+
+void _tcpLatencyTests() {
+  group('TcpLatencyTester', () {
+    test('能测到本机监听端口的握手耗时', () async {
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(server.close);
+
+      const tester = TcpLatencyTester();
+      final delay = await tester.ping('127.0.0.1', server.port);
+
+      expect(delay, isNotNull);
+      expect(delay, greaterThanOrEqualTo(0));
+    });
+
+    test('连不上时返回 null 而不是抛异常', () async {
+      // 先占一个端口再放开，拿到一个几乎肯定没人监听的端口号
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final port = server.port;
+      await server.close();
+
+      const tester = TcpLatencyTester();
+      expect(await tester.ping('127.0.0.1', port), isNull);
+    });
+
+    test('主机名或端口非法时返回 null', () async {
+      const tester = TcpLatencyTester();
+      expect(await tester.ping('', 443), isNull);
+      expect(await tester.ping('example.com', 0), isNull);
     });
   });
 }

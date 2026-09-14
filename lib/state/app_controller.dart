@@ -16,6 +16,7 @@ import '../core/api/panel_api.dart';
 import '../core/config/app_config.dart';
 import '../core/config/config_repository.dart';
 import '../core/proxy/core_provisioner.dart';
+import '../core/proxy/latency_tester.dart';
 import '../core/proxy/proxy_core.dart';
 import '../core/proxy/singbox_config.dart';
 import '../core/proxy/system_proxy.dart';
@@ -206,6 +207,7 @@ class AppController extends Notifier<AppState> {
   ProxyCore? _core;
   StreamSubscription<CoreEvent>? _coreSubscription;
   static const _systemProxy = SystemProxyController();
+  static const _tcpTester = TcpLatencyTester();
   bool _systemProxyApplied = false;
   List<String> _availableRuleSets = const [];
 
@@ -441,29 +443,21 @@ class AppController extends Notifier<AppState> {
 
   /// 批量测速。
   ///
-  /// 走 Clash API，由内核**经由每个节点**发一次小请求，所以需要内核在运行。
-  /// 为了不必"先连接才能测速"，这里会在需要时**静默把内核拉起来**；
-  /// 这一步**不接管系统代理** —— 用户只是想先看看哪个节点快。
+  /// **不需要先连接，也不会顺手把内核拉起来**：
+  ///   * 内核在跑  -> 走 Clash API，由内核经该节点实测（最贴近真实体验）
+  ///   * 未连接    -> 走 TCP 握手耗时（只需一条连接，不碰内核与系统代理）
+  ///
+  /// 之前那种"静默起内核"的做法会让界面进入半连接状态（内核在跑、
+  /// 系统代理却没接管），反而更容易让人误以为已经连上。
   ///
   /// 测完若开启了 [ProxyConfig.autoSelectFastest]，会切到延迟最低的节点，
   /// 这样随后点连接就直接用最快的线路，不用连上再换。
   Future<void> testAllNodes() async {
     if (state.testingNodes || state.nodes.isEmpty) return;
 
-    if (!state.isRunning) {
-      state = state.copyWith(busy: true, clearError: true);
-      try {
-        final started = await _startCore();
-        state = state.copyWith(busy: false);
-        if (!started) return; // _startCore 已经写入错误
-      } on Object catch (e) {
-        state = state.copyWith(busy: false, error: '启动内核失败：$e');
-        return;
-      }
-    }
-
     final core = _core;
-    if (core is! ProcessProxyCore) return;
+    final useCore = state.isRunning && core is ProcessProxyCore;
+    final nodeByTag = {for (final n in state.nodes) n.tag: n};
 
     final tags = state.nodes.map((n) => n.tag).toList();
     state = state.copyWith(
@@ -473,13 +467,19 @@ class AppController extends Notifier<AppState> {
     );
 
     final results = <String, int>{};
-    // 并发太高会让内核同时开太多连接，反而把延迟测歪；4 是个稳妥值。
+    // 并发太高会让内核/网络同时承受太多连接，反而把延迟测歪；4 是个稳妥值。
     const concurrency = 4;
     for (var i = 0; i < tags.length; i += concurrency) {
       final batch = tags.skip(i).take(concurrency).toList();
       await Future.wait(
         batch.map((tag) async {
-          final delay = await core.testDelay(tag);
+          final node = nodeByTag[tag];
+          if (node == null) return;
+
+          final delay = useCore
+              ? await core.testDelay(tag)
+              : await _tcpTester.ping(node.server, node.port);
+
           results[tag] = delay == null || delay <= 0
               ? AppState.failedDelay
               : delay;
@@ -493,7 +493,9 @@ class AppController extends Notifier<AppState> {
     state = state.copyWith(
       testingNodes: false,
       nodeDelays: results,
-      notice: '测速完成：$ok / ${tags.length} 个节点可用',
+      notice:
+          '测速完成（${useCore ? "内核实测" : "TCP 延迟"}）：'
+          '$ok / ${tags.length} 个节点可用',
     );
 
     if (state.config.proxy.autoSelectFastest) {
