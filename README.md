@@ -169,6 +169,24 @@ CI 位于 `.github/workflows/build.yml`，包含一条所有平台共用的质�
 
 ---
 
+## 支持项目
+
+如果这个项目对你有用，欢迎通过以下方式支持：
+
+<p>
+  <img src="support/WeiXin.png" alt="微信收款码" width="220">
+  &nbsp;&nbsp;
+  <img src="support/ZhiFuBao.jpg" alt="支付宝收款码" width="220">
+</p>
+
+也可以使用下面的邀请链接注册账号，作者会获得一定的推广额度：
+
+<https://16.76.177.124/auth/register?code=YHW9HKLq>
+
+> 二维码原图位于 [`support/`](support/)。感谢支持。
+
+---
+
 ## 许可证
 
 **GPL-3.0-or-later**，见 [`LICENSE`](LICENSE)。
