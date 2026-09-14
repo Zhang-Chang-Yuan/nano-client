@@ -7,19 +7,56 @@
 //   Windows -> 注册表 Internet Settings
 //   macOS   -> networksetup（对当前网络服务生效）
 //
-// 注意：这些命令只改动"代理开关"，不负责备份用户原有的代理配置。
-// 关闭时会把代理关掉（而不是恢复成原来那套）。
+// ⚠️ 两个踩过的坑，改动前务必先读：
+//
+// 1. **不能只看退出码。** 从缺少 `DBUS_SESSION_BUS_ADDRESS` 的上下文启动时，
+//    `gsettings set` 会打印 dconf 警告、**退出码却是 0**，而值根本没写进去。
+//    所以每次设置后都要读回确认，见 `_verifyLinuxProxy`。
+//
+// 2. **必须补上会话总线变量。** 桌面启动时环境里通常有，但从某些终端/服务
+//    启动时会缺失，导致上面第 1 条。见 [linuxSessionEnv]。
 
 import 'dart:io';
 
 /// 一次系统代理操作的结果。
 class SystemProxyResult {
-  const SystemProxyResult({required this.ok, this.detail});
+  const SystemProxyResult({required this.ok, this.detail, this.stdout});
 
   final bool ok;
+
+  /// 失败原因。
   final String? detail;
 
+  /// 命令的标准输出，便于诊断。
+  final String? stdout;
+
   static const SystemProxyResult success = SystemProxyResult(ok: true);
+}
+
+/// 计算 Linux 下 `gsettings` / dconf 需要的会话环境变量。
+///
+/// 从缺少 `DBUS_SESSION_BUS_ADDRESS` 的上下文启动时，gsettings 会**静默失败**
+/// （退出码 0 但值没写进去）。这里显式补上，指向会话总线 socket。
+///
+/// [parent] 是当前进程的环境；[uid] 用于在 `XDG_RUNTIME_DIR` 缺失时兜底。
+Map<String, String> linuxSessionEnv(Map<String, String> parent, {String? uid}) {
+  final env = <String, String>{};
+
+  var runtimeDir = parent['XDG_RUNTIME_DIR'];
+  if ((runtimeDir == null || runtimeDir.isEmpty) &&
+      uid != null &&
+      uid.isNotEmpty) {
+    runtimeDir = '/run/user/$uid';
+  }
+  if (runtimeDir == null || runtimeDir.isEmpty) return env;
+
+  env['XDG_RUNTIME_DIR'] = runtimeDir;
+
+  final address = parent['DBUS_SESSION_BUS_ADDRESS'];
+  if (address == null || address.isEmpty) {
+    env['DBUS_SESSION_BUS_ADDRESS'] = 'unix:path=$runtimeDir/bus';
+  }
+  return env;
 }
 
 /// 跨平台系统代理控制器。
@@ -56,12 +93,13 @@ class SystemProxyController {
   Future<SystemProxyResult> disable() async {
     try {
       if (Platform.isLinux) {
+        final env = await _sessionEnv();
         return await _run('gsettings', [
           'set',
           'org.gnome.system.proxy',
           'mode',
           'none',
-        ]);
+        ], environment: env);
       }
       if (Platform.isWindows) {
         return await _run('reg', [
@@ -99,36 +137,88 @@ class SystemProxyController {
   // -- Linux ---------------------------------------------------------------
 
   Future<SystemProxyResult> _enableLinux(String host, int port) async {
-    // 依次设置 http / https / socks 三组，再切到 manual
+    final env = await _sessionEnv();
+
     for (final scheme in ['http', 'https', 'socks']) {
       final hostResult = await _run('gsettings', [
         'set',
         'org.gnome.system.proxy.$scheme',
         'host',
         host,
-      ]);
+      ], environment: env);
       if (!hostResult.ok) return hostResult;
+
       final portResult = await _run('gsettings', [
         'set',
         'org.gnome.system.proxy.$scheme',
         'port',
         '$port',
-      ]);
+      ], environment: env);
       if (!portResult.ok) return portResult;
     }
-    final ignore = await _run('gsettings', [
+
+    await _run('gsettings', [
       'set',
       'org.gnome.system.proxy',
       'ignore-hosts',
       "['localhost', '127.0.0.0/8', '::1']",
-    ]);
-    if (!ignore.ok) return ignore;
-    return _run('gsettings', [
+    ], environment: env);
+
+    final modeResult = await _run('gsettings', [
       'set',
       'org.gnome.system.proxy',
       'mode',
       'manual',
-    ]);
+    ], environment: env);
+    if (!modeResult.ok) return modeResult;
+
+    return _verifyLinuxProxy(host, port, env);
+  }
+
+  /// 读回确认真的写进去了。
+  ///
+  /// 必需 —— `gsettings` 在 dconf 不可用时也会返回退出码 0。
+  Future<SystemProxyResult> _verifyLinuxProxy(
+    String host,
+    int port,
+    Map<String, String> env,
+  ) async {
+    final mode = await _run('gsettings', [
+      'get',
+      'org.gnome.system.proxy',
+      'mode',
+    ], environment: env);
+    final readMode = (mode.stdout ?? '').replaceAll("'", '').trim();
+    if (readMode != 'manual') {
+      return SystemProxyResult(
+        ok: false,
+        detail:
+            '系统代理未生效（读到 "$readMode"）。'
+            '通常是当前环境缺少会话总线（DBUS_SESSION_BUS_ADDRESS）导致，'
+            '可手动把代理指向 $host:$port',
+      );
+    }
+
+    final readHost = await _run('gsettings', [
+      'get',
+      'org.gnome.system.proxy.http',
+      'host',
+    ], environment: env);
+    final readPort = await _run('gsettings', [
+      'get',
+      'org.gnome.system.proxy.http',
+      'port',
+    ], environment: env);
+    final actualHost = (readHost.stdout ?? '').replaceAll("'", '').trim();
+    final actualPort = (readPort.stdout ?? '').trim();
+    if (actualHost != host || actualPort != '$port') {
+      return SystemProxyResult(
+        ok: false,
+        detail: '系统代理地址不符（读到 $actualHost:$actualPort）',
+      );
+    }
+
+    return SystemProxyResult.success;
   }
 
   // -- Windows -------------------------------------------------------------
@@ -163,7 +253,7 @@ class SystemProxyController {
     ]);
     if (!bypass.ok) return bypass;
 
-    return _run('reg', [
+    final enable = await _run('reg', [
       'add',
       _windowsKey,
       '/v',
@@ -174,6 +264,19 @@ class SystemProxyController {
       '1',
       '/f',
     ]);
+    if (!enable.ok) return enable;
+
+    // 同样读回确认
+    final readBack = await _run('reg', [
+      'query',
+      _windowsKey,
+      '/v',
+      'ProxyEnable',
+    ]);
+    if (!(readBack.stdout ?? '').contains('0x1')) {
+      return const SystemProxyResult(ok: false, detail: '系统代理未生效（注册表读回不一致）');
+    }
+    return SystemProxyResult.success;
   }
 
   // -- macOS ---------------------------------------------------------------
@@ -183,12 +286,11 @@ class SystemProxyController {
     if (service == null) {
       return const SystemProxyResult(ok: false, detail: '找不到活动的网络服务');
     }
-    final commands = <List<String>>[
+    for (final args in <List<String>>[
       ['-setwebproxy', service, host, '$port'],
       ['-setsecurewebproxy', service, host, '$port'],
       ['-setsocksfirewallproxy', service, host, '$port'],
-    ];
-    for (final args in commands) {
+    ]) {
       final result = await _run('networksetup', args);
       if (!result.ok) return result;
     }
@@ -197,7 +299,6 @@ class SystemProxyController {
 
   /// 取当前正在使用的网络服务名（networksetup 需要服务名而不是接口名）。
   Future<String?> _macosActiveService() async {
-    // route 输出里带默认接口，例如 "interface: en0"
     final route = await Process.run('route', ['-n', 'get', 'default']);
     final match = RegExp(r'interface:\s*(\w+)').firstMatch('${route.stdout}');
     final device = match?.group(1);
@@ -206,7 +307,6 @@ class SystemProxyController {
     final order = await Process.run('networksetup', [
       '-listnetworkserviceorder',
     ]);
-    // 形如 "(1) Wi-Fi\n(Hardware Port: Wi-Fi, Device: en0)"
     final blocks = '${order.stdout}'.split(RegExp(r'\n(?=\(\d+\))'));
     for (final block in blocks) {
       if (block.contains('Device: $device')) {
@@ -220,13 +320,47 @@ class SystemProxyController {
     return null;
   }
 
-  Future<SystemProxyResult> _run(String exe, List<String> args) async {
+  // -- 公共 ----------------------------------------------------------------
+
+  Future<Map<String, String>> _sessionEnv() async {
+    if (!Platform.isLinux) return const {};
+    var uid = Platform.environment['UID'];
+    if (uid == null || uid.isEmpty) {
+      uid = await _currentUid();
+    }
+    return linuxSessionEnv(Platform.environment, uid: uid);
+  }
+
+  Future<String?> _currentUid() async {
     try {
-      final result = await Process.run(exe, args);
-      if (result.exitCode == 0) return SystemProxyResult.success;
+      final result = await Process.run('id', ['-u']);
+      if (result.exitCode == 0) return '${result.stdout}'.trim();
+    } on Object {
+      // 拿不到就算了，交给上层报错
+    }
+    return null;
+  }
+
+  Future<SystemProxyResult> _run(
+    String exe,
+    List<String> args, {
+    Map<String, String>? environment,
+  }) async {
+    try {
+      final result = await Process.run(
+        exe,
+        args,
+        environment: environment,
+        includeParentEnvironment: true,
+      );
+      final out = '${result.stdout}'.trim();
+      if (result.exitCode == 0) {
+        return SystemProxyResult(ok: true, stdout: out);
+      }
       final err = '${result.stderr}'.trim();
       return SystemProxyResult(
         ok: false,
+        stdout: out,
         detail: err.isEmpty ? '$exe 退出码 ${result.exitCode}' : err,
       );
     } on ProcessException catch (e) {

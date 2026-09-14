@@ -1,9 +1,12 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nano_client/core/config/app_config.dart';
 import 'package:nano_client/core/proxy/proxy_core.dart';
+import 'package:nano_client/core/proxy/system_proxy.dart';
 import 'package:nano_client/state/app_controller.dart';
 
 void main() {
+  _sessionEnvTests();
+
   group('新增代理设置的序列化', () {
     test('自动接管系统代理 / 自动选最快 能往返', () {
       const original = ProxyConfig(
@@ -73,6 +76,40 @@ void main() {
         systemProxyActive: true,
       );
       expect(state.isConnected, isFalse);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 系统代理：会话环境补齐
+// ---------------------------------------------------------------------------
+
+void _sessionEnvTests() {
+  group('linuxSessionEnv', () {
+    test('父环境已完整时不重复覆盖', () {
+      final env = linuxSessionEnv(const {
+        'XDG_RUNTIME_DIR': '/run/user/1000',
+        'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1000/bus',
+      });
+      expect(env['XDG_RUNTIME_DIR'], '/run/user/1000');
+      // 只返回"需要覆盖"的量；父进程已有的会话总线靠
+      // includeParentEnvironment 保留，不重复设置
+      expect(env.containsKey('DBUS_SESSION_BUS_ADDRESS'), isFalse);
+    });
+
+    test('缺少 DBUS_SESSION_BUS_ADDRESS 时补上（这是 gsettings 静默失败的根因）', () {
+      final env = linuxSessionEnv(const {'XDG_RUNTIME_DIR': '/run/user/1000'});
+      expect(env['DBUS_SESSION_BUS_ADDRESS'], 'unix:path=/run/user/1000/bus');
+    });
+
+    test('缺少 XDG_RUNTIME_DIR 时用 uid 兜底', () {
+      final env = linuxSessionEnv(const {}, uid: '1000');
+      expect(env['XDG_RUNTIME_DIR'], '/run/user/1000');
+      expect(env['DBUS_SESSION_BUS_ADDRESS'], 'unix:path=/run/user/1000/bus');
+    });
+
+    test('两者都拿不到时返回空表，不去猜路径', () {
+      expect(linuxSessionEnv(const {}), isEmpty);
     });
   });
 }
